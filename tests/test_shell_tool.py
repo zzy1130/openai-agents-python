@@ -287,6 +287,78 @@ async def test_shell_tool_structured_output_is_rendered() -> None:
 
 
 @pytest.mark.asyncio
+async def test_shell_tool_empty_structured_output_is_not_fabricated() -> None:
+    """A ShellResult with an empty output list must not fabricate stdout.
+
+    Regression test for https://github.com/openai/openai-agents-python/issues/5348:
+    the structured model-facing payload and the persisted shell_output must not
+    contain the "(no output)" display placeholder as if it were executor output.
+    The plain-text channel keeps the placeholder for human display.
+    """
+    shell_tool = ShellTool(executor=lambda request: ShellResult(output=[]))
+    tool_run = ToolRunShellCall(tool_call=_shell_call(), shell_tool=shell_tool)
+    agent = Agent(name="shell-agent", tools=[shell_tool])
+    context_wrapper: RunContextWrapper[Any] = RunContextWrapper(context=None)
+
+    result = await ShellAction.execute(
+        agent=agent,
+        call=tool_run,
+        hooks=RunHooks[Any](),
+        context_wrapper=context_wrapper,
+        config=RunConfig(),
+    )
+
+    assert isinstance(result, ToolCallOutputItem)
+    # The plain-text channel is for humans; the placeholder stays there.
+    assert result.output == "(no output)"
+
+    raw_item = cast(dict[str, Any], result.raw_item)
+    assert raw_item["type"] == "shell_call_output"
+    assert raw_item["status"] == "completed"
+    assert raw_item["output"] == []
+    assert "shell_output" not in raw_item
+
+    input_payload = result.to_input_item()
+    assert isinstance(input_payload, dict)
+    payload_dict = cast(dict[str, Any], input_payload)
+    assert payload_dict["type"] == "shell_call_output"
+    assert payload_dict["output"] == []
+
+
+@pytest.mark.asyncio
+async def test_shell_tool_plain_string_output_still_uses_placeholder_fallback() -> None:
+    """Plain str executor returns keep the placeholder fallback in structured output."""
+    shell_tool = ShellTool(executor=lambda request: "plain text output")
+    tool_run = ToolRunShellCall(tool_call=_shell_call(), shell_tool=shell_tool)
+    agent = Agent(name="shell-agent", tools=[shell_tool])
+    context_wrapper: RunContextWrapper[Any] = RunContextWrapper(context=None)
+
+    result = await ShellAction.execute(
+        agent=agent,
+        call=tool_run,
+        hooks=RunHooks[Any](),
+        context_wrapper=context_wrapper,
+        config=RunConfig(),
+    )
+
+    assert isinstance(result, ToolCallOutputItem)
+    assert result.output == "plain text output"
+    raw_item = cast(dict[str, Any], result.raw_item)
+    assert raw_item["type"] == "shell_call_output"
+    assert raw_item["status"] == "completed"
+    structured_output = raw_item["output"]
+    assert len(structured_output) == 1
+    assert structured_output[0]["stdout"] == "plain text output"
+    assert structured_output[0]["stderr"] == ""
+    assert structured_output[0]["outcome"] == {"type": "exit", "exit_code": 0}
+    persisted = raw_item["shell_output"]
+    assert len(persisted) == 1
+    assert persisted[0]["stdout"] == "plain text output"
+    assert persisted[0]["status"] == "completed"
+    assert persisted[0]["outcome"] == "success"
+
+
+@pytest.mark.asyncio
 async def test_shell_tool_emits_function_span() -> None:
     shell_tool = ShellTool(executor=lambda request: "shell span output")
     tool_run = ToolRunShellCall(tool_call=_shell_call("call_shell_trace"), shell_tool=shell_tool)

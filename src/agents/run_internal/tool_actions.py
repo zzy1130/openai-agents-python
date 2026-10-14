@@ -626,7 +626,12 @@ class ShellAction:
             raw_entries: list[dict[str, Any]] | None = None
             if shell_output_payload:
                 raw_entries = shell_output_payload
-            elif output_text:
+            elif output_text and shell_output_payload is None:
+                # The placeholder fallback only applies when the executor did not
+                # return a structured ShellResult. A ShellResult with an empty
+                # output list is a valid "nothing to report" payload, so keep the
+                # "(no output)" placeholder in the human-readable plain text
+                # channel and do not fabricate it as structured stdout here.
                 raw_entries = [
                     {
                         "stdout": output_text,
